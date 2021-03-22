@@ -3,6 +3,8 @@ bootstrap_server: "localhost:9092"
 schema_server: "http://localhost:8081/"
 use_avro: False
 use_ssl: False
+show_sent_msg: False
+show_sent_json: False
 ssl_cafile: "" # certificate.pem
 ssl_keyfile: "" # keystore.jks
 ssl_password: "PASSWORD"
@@ -24,3 +26,4 @@ list_to_kafka:
     ros_topic: "test_to_kafka"
     ros_msg_type: "std_msgs/String"
     avro_subject: ""
+    avro_file: ""

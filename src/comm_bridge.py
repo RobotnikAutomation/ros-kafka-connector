@@ -14,11 +14,20 @@ from confluent.schemaregistry.serializers import MessageSerializer
 
 
 class Topic:
-    def __init__(self, kafka_topic, ros_topic, ros_msg_type, avro_subject):
+    def __init__(self, kafka_topic, ros_topic, ros_msg_type, avro_subject=None, avro_file=""):
         self.kafka_topic = kafka_topic
         self.ros_topic = ros_topic
         self.ros_msg_type = ros_msg_type
         self.avro_subject = avro_subject
+        self.avro_file = avro_file
+
+    def debug_callack(self, event):
+        received_messages = self.received_messages_in_total - self.received_messages_until_last_debug_period
+        self.received_messages_until_last_debug_period = self.received_messages_in_total
+        rospy.loginfo('From ROS: %s to %s %s: Received %d in %1.1f seconds (total %d)', self.ros_topic, self.kafka_or_avro_log(), self.kafka_topic, received_messages, self.debug_info_period, self.received_messages_in_total)
+
+    def kafka_or_avro_log(self):
+        return ("AVRO", "KAFKA")[self.avro_subject!=None]
 
 
 class comm_bridge():
@@ -44,6 +53,9 @@ class comm_bridge():
         self.use_ssl = rospy.get_param("~use_ssl", False)
         self.use_avro = rospy.get_param("~use_avro", False)
 
+        self.show_sent_msg = rospy.get_param("~show_sent_msg", False)
+        self.show_sent_json = rospy.get_param("~show_sent_json", False)
+
         self.group_id = rospy.get_param("~group_id", None)
         if (self.group_id == "no-group"):
             self.group_id = None
@@ -57,7 +69,7 @@ class comm_bridge():
             self.sasl_plain_username = rospy.get_param("~sasl_plain_username", "username")
             self.sasl_plain_password = rospy.get_param("~sasl_plain_password", "password")
 
-        # from kafka to ROS topics parameters
+        # from Kafka to ROS topics parameters
         list_from_kafka_topics = rospy.get_param("~list_from_kafka", [])
         self.list_from_kafka = []
         for item in list_from_kafka_topics:
@@ -71,7 +83,7 @@ class comm_bridge():
         for item in list_to_kafka_topics:
             # TODO: check if some value is missing
             self.list_to_kafka.append(Topic(item["kafka_topic"], "to_kafka/"+item["ros_topic"],
-                                         item["ros_msg_type"], item["avro_subject"]))
+                                         item["ros_msg_type"], item["avro_subject"], item["avro_file"]))
 
         # Create schema registry connection and serializer
         self.client = CachedSchemaRegistryClient(url=schema_server)
@@ -79,7 +91,12 @@ class comm_bridge():
 
         if (self.use_avro):
             for topic in self.list_to_kafka:
+                rospy.loginfo("Loading schema for " + topic.avro_subject + " from registry server")
                 _, topic.avro_schema, _ = self.client.get_latest_schema(topic.avro_subject)
+
+                if topic.avro_file != "":
+                    rospy.loginfo("Loading schema for " + topic.avro_subject + " from file " + topic.avro_file + " as it does not exist in the server")
+                    topic.avro_schema = avro.schema.parse(open(topic.avro_file).read())
 
                 if topic.avro_schema is None:
                     rospy.logerr("cannot get schema for " + topic.avro_subject)
@@ -110,6 +127,12 @@ class comm_bridge():
             # Import msg type
             msg_func = ros_loader.get_message_class(topic.ros_msg_type)
 
+            topic.received_messages_in_total = 0
+            topic.debug_info_period = rospy.get_param("~debug_info_period", 10)
+            if topic.debug_info_period != 0:
+                topic.received_messages_until_last_debug_period = 0
+                topic.debug_info_timer = rospy.Timer(rospy.Duration(topic.debug_info_period), topic.debug_callack)
+
             # Subscribe to ROS topic of interest
             topic.publisher = rospy.Publisher(topic.ros_topic, msg_func, queue_size=10)
             rospy.logwarn("Using {} MSGs from KAFKA: {} -> ROS: {}".format(topic.ros_msg_type, topic.kafka_topic, topic.ros_topic))
@@ -135,18 +158,28 @@ class comm_bridge():
             # type must be imported and specified ahead of time.
             msg_func = ros_loader.get_message_class(topic.ros_msg_type)
 
+            topic.received_messages_in_total = 0
+            topic.debug_info_period = rospy.get_param("~debug_info_period", 10)
+            if topic.debug_info_period != 0:
+                topic.received_messages_until_last_debug_period = 0
+                topic.debug_info_timer = rospy.Timer(rospy.Duration(topic.debug_info_period), topic.debug_callack)
+
             # Subscribe to the topic with the chosen imported message type
             rospy.Subscriber(topic.ros_topic, msg_func, self.callback, topic)
             rospy.logwarn("Using {} MSGs from ROS: {} -> KAFKA: {}".format(topic.ros_msg_type, topic.ros_topic, topic.kafka_topic))
 
     def callback(self, msg, topic):
+        topic.received_messages_in_total += 1
+
         # Output msg to ROS and send to Kafka server
-        rospy.logwarn("MSG received from {}: {}".format(topic.ros_topic, msg))
+        if self.show_sent_msg:
+            rospy.logwarn("MSG received from {}: {}".format(topic.ros_topic, msg))
         # Convert from ROS Msg to Dictionary
         msg_as_dict = message_converter.convert_ros_message_to_dictionary(msg)
         # also print as json for debugging purposes
         msg_as_json = json_message_converter.convert_ros_message_to_json(msg)
-        rospy.logwarn(msg_as_json)
+        if self.show_sent_json:
+            rospy.logwarn(msg_as_json)
         # Convert from Dictionary to Kafka message
         # this way is slow, as it has to retrieve last schema
         # msg_as_serial = self.serializer.encode_record_for_topic(self.kafka_topic, msg_as_dict)
@@ -174,16 +207,32 @@ class comm_bridge():
         while not rospy.is_shutdown():
             for topic in self.list_from_kafka:
                 for msg in topic.consumer:
+                    ros_msg = None
+                    topic.received_messages_in_total += 1
                     rospy.logwarn("Received MSG from: " + topic.kafka_topic)
                     if (self.use_avro):
-                        # Convert Kafka message to Dictionary
-                        msg_as_dict = self.serializer.decode_message(msg.value)
-                        # Convert Dictionary to ROS Msg
-                        ros_msg = message_converter.convert_dictionary_to_ros_message(topic.ros_msg_type, msg_as_dict)
+                        try:
+                            # Convert Kafka message to Dictionary
+                            msg_as_dict = self.serializer.decode_message(msg.value)
+                            # Convert Dictionary to ROS Msg
+                            ros_msg = message_converter.convert_dictionary_to_ros_message(topic.ros_msg_type, msg_as_dict, check_types=False)
+                            if self.show_received_json:
+                                rospy.loginfo(msg_as_dict)
+                        except Exception as e:
+                            rospy.logwarn(str(e) + ': time to debug!')
                     else:
-                        ros_msg = json_message_converter.convert_json_to_ros_message(topic.ros_msg_type, msg.value)
+                        try:
+                            ros_msg = json_message_converter.convert_json_to_ros_message(topic.ros_msg_type, msg.value)
+                            if self.show_received_json:
+                                rospy.loginfo(msg.value)
+                        except ValueError as e:
+                            rospy.logwarn(str(e) + ': probably you are receiving an avro-encoded message, but trying to process it as a plain message')
+                        except Exception as e:
+                                rospy.logwarn(str(e) + ': time to debug!')
+                    
                     # Publish to ROS topic
-                    topic.publisher.publish(ros_msg)
+                    if ros_msg != None:
+                        topic.publisher.publish(ros_msg)
 
     def shutdown(self):
         rospy.loginfo("Shutting down")
