@@ -82,8 +82,12 @@ class comm_bridge():
         self.list_to_kafka = []
         for item in list_to_kafka_topics:
             # TODO: check if some value is missing
-            self.list_to_kafka.append(Topic(item["kafka_topic"], "to_kafka/"+item["ros_topic"],
+            if self.use_avro:
+                self.list_to_kafka.append(Topic(item["kafka_topic"], "to_kafka/"+item["ros_topic"],
                                          item["ros_msg_type"], item["avro_subject"], item["avro_file"]))
+            else:
+                self.list_to_kafka.append(Topic(item["kafka_topic"], "to_kafka/"+item["ros_topic"],
+                                         item["ros_msg_type"]))
 
         # Create schema registry connection and serializer
         self.client = CachedSchemaRegistryClient(url=schema_server)
