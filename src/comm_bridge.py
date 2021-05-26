@@ -56,6 +56,8 @@ class comm_bridge():
         self.show_sent_msg = rospy.get_param("~show_sent_msg", False)
         self.show_sent_json = rospy.get_param("~show_sent_json", False)
 
+	self.nan_as_str = rospy.get_param("~nan_as_str", False)
+
         self.group_id = rospy.get_param("~group_id", None)
         if (self.group_id == "no-group"):
             self.group_id = None
@@ -182,6 +184,8 @@ class comm_bridge():
         msg_as_dict = message_converter.convert_ros_message_to_dictionary(msg)
         # also print as json for debugging purposes
         msg_as_json = json_message_converter.convert_ros_message_to_json(msg)
+        if self.nan_as_str:
+            msg_as_json = msg_as_json.replace("NaN", '"NaN"')
         if self.show_sent_json:
             rospy.logwarn(msg_as_json)
         # Convert from Dictionary to Kafka message
