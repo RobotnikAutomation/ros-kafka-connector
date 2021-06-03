@@ -85,8 +85,12 @@ class comm_bridge():
         for item in list_to_kafka_topics:
             # TODO: check if some value is missing
             if self.use_avro:
-                self.list_to_kafka.append(Topic(item["kafka_topic"], "to_kafka/"+item["ros_topic"],
+                if "avro_file" in item.keys():
+                    self.list_to_kafka.append(Topic(item["kafka_topic"], "to_kafka/"+item["ros_topic"],
                                          item["ros_msg_type"], item["avro_subject"], item["avro_file"]))
+                else:
+                    self.list_to_kafka.append(Topic(item["kafka_topic"], "to_kafka/"+item["ros_topic"],
+                                         item["ros_msg_type"], item["avro_subject"]))
             else:
                 self.list_to_kafka.append(Topic(item["kafka_topic"], "to_kafka/"+item["ros_topic"],
                                          item["ros_msg_type"]))
