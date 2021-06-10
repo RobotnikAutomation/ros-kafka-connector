@@ -37,7 +37,8 @@ You could also send the message to the kafka server through python with the foll
 
 #### Install kafka library
 ```
-$ pip install kafka-python
+apt-get install librdkafka-dev python-dev
+python3 -m pip install confluent-kafka
 ```
 #### python script (without avro schema)
 ```
